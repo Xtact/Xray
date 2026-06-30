@@ -27,18 +27,18 @@
         .hero-text p { font-size: 13px; color: #888; }
 
         /* UI ELEMENTS */
-        .editor-top-bar { display: flex; justify-content: space-between; align-items: center; padding: env(safe-area-inset-top, 20px) 20px 15px; background: #000; z-index: 20; border-bottom: 1px solid #111;}
+        .editor-top-bar { display: flex; justify-content: space-between; align-items: center; padding: env(safe-area-inset-top, 20px) 20px 15px; background: rgba(0,0,0,0.8); z-index: 20; border-bottom: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(10px);}
         .icon-btn { background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); color: white; width: 44px; height: 44px; border-radius: 22px; display: flex; justify-content: center; align-items: center; cursor: pointer; backdrop-filter: blur(5px); }
         .icon-btn svg { width: 22px; height: 22px; pointer-events: none; }
-        .primary-btn { background: #00ffff; color: #000; border: none; padding: 12px 20px; border-radius: 25px; font-size: 15px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; width: 100%; }
+        .primary-btn { background: #00ffff; color: #000; border: none; padding: 12px 20px; border-radius: 25px; font-size: 15px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; width: 100%; margin-top: 10px;}
         .primary-btn:active { transform: scale(0.98); opacity: 0.9; }
 
         /* SLIDERS & CONTROLS */
-        .slider-container { padding: 5px 20px; }
+        .slider-container { padding: 5px 10px; }
         input[type="range"] { -webkit-appearance: none; width: 100%; height: 4px; border-radius: 2px; background: #333; outline: none; margin-top: 8px;}
         input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; border-radius: 12px; background: #fff; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.5); }
-        .carousel-header { display: flex; justify-content: center; align-items: center; padding: 10px 0 5px; }
-        .carousel-header span { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        .carousel-header { display: flex; justify-content: flex-start; align-items: center; padding: 5px 0; }
+        .carousel-header span { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #00ffff; }
 
         .switch { position: relative; display: inline-block; width: 40px; height: 24px; }
         .switch input { opacity: 0; width: 0; height: 0; }
@@ -47,14 +47,17 @@
         input:checked + .slider-switch { background-color: #00ffff; }
         input:checked + .slider-switch:before { transform: translateX(16px); }
 
-        .tune-deck { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 15px 20px; background: transparent; border: none; width: 100%; }
+        .tune-deck { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 15px; background: transparent; border: none; width: 100%; }
 
-        /* VIDEO CANVAS */
-        #xray-video-source, #xray-gl-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
-        #xray-gl-canvas { z-index: 1; pointer-events: none; }
-        
-        .ar-bottom-bar { position: absolute; bottom: 0; left: 0; width: 100%; display: flex; flex-direction: column; align-items: center; z-index: 10; background: linear-gradient(to top, rgba(0,0,0,0.9) 80%, transparent); padding-bottom: calc(env(safe-area-inset-bottom, 20px) + 10px); }
-        .ar-hint { color: #888; font-size: 12px; margin-top: 5px; }
+        /* SPLIT VIEW CSS */
+        #split-view-container { position: absolute; top: calc(env(safe-area-inset-top, 20px) + 60px); left: 0; width: 100%; bottom: 330px; display: flex; flex-direction: column; background: #000; }
+        .split-pane { flex: 1; position: relative; min-height: 0; overflow: hidden; }
+        .split-pane video, .split-pane canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
+        .split-label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); color: #fff; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; z-index: 2; backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1); }
+        .split-label.xray-label { color: #00ffff; border-color: rgba(0,255,255,0.3); }
+
+        .ar-bottom-bar { position: absolute; bottom: 0; left: 0; width: 100%; height: 330px; display: flex; flex-direction: column; align-items: center; z-index: 10; background: #0a0a0a; border-top: 1px solid #222; padding-bottom: env(safe-area-inset-bottom, 20px); }
+        .ar-hint { color: #888; font-size: 11px; margin-top: 8px; }
 
         /* LOADING SPINNER */
         @keyframes xray-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -81,39 +84,58 @@
     </div>
 
     <div id="state-xray-video" class="app-state">
-        <video id="xray-video-source" playsinline muted loop style="display: none;"></video>
-        <canvas id="xray-gl-canvas"></canvas>
         
-        <div class="editor-top-bar" style="background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent); position: absolute; top:0; width: 100%; border:none; z-index: 10;">
+        <div class="editor-top-bar" style="position: absolute; top:0; width: 100%;">
             <div style="display: flex; gap: 15px; align-items: center;">
                 <button class="icon-btn" onclick="App.closeXRayVideo()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
             </div>
-            <span id="xray-status-label" style="font-size: 14px; font-weight: 600; color: #00ffff; text-shadow: 0 2px 4px rgba(0,0,0,0.8);">Looping Preview</span>
+            <span id="xray-status-label" style="font-size: 14px; font-weight: 600; color: #00ffff;">Split-Screen Preview</span>
             <div style="width: 44px;"></div>
+        </div>
+
+        <div id="split-view-container">
+            <div class="split-pane">
+                <span class="split-label">Original Video</span>
+                <video id="xray-video-source" playsinline muted loop></video>
+            </div>
+            
+            <div class="split-pane" style="border-top: 1px solid #333; background: #050505;">
+                <span class="split-label xray-label">X-Ray Matrix</span>
+                <canvas id="xray-gl-canvas"></canvas>
+            </div>
         </div>
 
         <div class="ar-bottom-bar" id="xray-controls">
             <div class="tune-deck">
-                <div class="slider-container" style="padding:0; border:none;">
-                    <div class="carousel-header"><span style="color: #00ffff;">Sensitivity</span></div>
+                <div class="slider-container">
+                    <div class="carousel-header"><span>Sensitivity</span></div>
                     <input type="range" id="xray-vid-sens" min="0" max="100" value="50" oninput="App.updateXRaySettings()">
                 </div>
-                <div class="slider-container" style="padding:0; border:none;">
-                    <div class="carousel-header"><span style="color: #00ffff;">Pre-Contrast</span></div>
+                <div class="slider-container">
+                    <div class="carousel-header"><span>Pre-Contrast</span></div>
                     <input type="range" id="xray-vid-cont" min="0" max="200" value="100" oninput="App.updateXRaySettings()">
                 </div>
-                <div class="slider-container" style="padding:0; border:none;">
-                    <div class="carousel-header"><span style="color: #00ffff;">Noise Gate</span></div>
+                <div class="slider-container">
+                    <div class="carousel-header"><span>Edge Width</span></div>
+                    <input type="range" id="xray-vid-thick" min="10" max="50" value="10" oninput="App.updateXRaySettings()">
+                </div>
+                <div class="slider-container">
+                    <div class="carousel-header"><span>Brightness</span></div>
+                    <input type="range" id="xray-vid-exp" min="50" max="300" value="100" oninput="App.updateXRaySettings()">
+                </div>
+                <div class="slider-container">
+                    <div class="carousel-header"><span>Noise Gate</span></div>
                     <input type="range" id="xray-vid-gate" min="0" max="100" value="0" oninput="App.updateXRaySettings()">
                 </div>
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 15px 5px 0;">
-                    <span style="font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase;">Invert Matrix</span>
-                    <label class="switch" style="transform: scale(0.9); margin:0;">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 10px 0;">
+                    <span style="font-size: 10px; font-weight: 600; color: #00ffff; text-transform: uppercase;">Invert Matrix</span>
+                    <label class="switch" style="transform: scale(0.85); margin:0;">
                         <input type="checkbox" id="xray-vid-inv" onchange="App.updateXRaySettings()">
                         <span class="slider-switch round"></span>
                     </label>
                 </div>
             </div>
+            
             <div style="width: 100%; padding: 0 20px;">
                 <button class="primary-btn" onclick="App.processAndDownloadXRay()">Process & Export Video</button>
             </div>
@@ -132,6 +154,8 @@
         const XRayEngine = {
             gl: null, program: null, tex: null, isActive: false, 
             sensitivity: 1.5, contrast: 1.0, noiseGate: 0.0, invert: 0,
+            thickness: 1.0, exposure: 1.0,
+
             init(canvas) {
                 this.gl = canvas.getContext('webgl', { preserveDrawingBuffer: true }); if(!this.gl) return false;
                 const vsSource = `attribute vec2 a_position; attribute vec2 a_texCoord; varying vec2 v_texCoord; void main() { gl_Position = vec4(a_position, 0.0, 1.0); v_texCoord = vec2(a_texCoord.x, 1.0 - a_texCoord.y); }`;
@@ -139,6 +163,7 @@
                     precision mediump float; varying vec2 v_texCoord; uniform sampler2D u_image; 
                     uniform vec2 u_resolution; uniform float u_sensitivity; 
                     uniform float u_contrast; uniform float u_noiseGate; uniform int u_invert;
+                    uniform float u_thickness; uniform float u_exposure;
                     
                     float getLuma(vec2 offset) {
                         vec3 rgb = texture2D(u_image, v_texCoord + offset).rgb;
@@ -147,7 +172,8 @@
                     }
 
                     void main() {
-                        vec2 step = 1.0 / u_resolution;
+                        // Apply dynamic edge thickness
+                        vec2 step = (1.0 / u_resolution) * u_thickness;
                         
                         float tll = getLuma(vec2(-step.x, step.y));
                         float tcl = getLuma(vec2(0.0, step.y));
@@ -166,6 +192,9 @@
                         if (edge < u_noiseGate) {
                             edge = 0.0;
                         }
+                        
+                        // Apply final exposure boost
+                        edge = clamp(edge * u_exposure, 0.0, 1.0);
                         
                         if (u_invert == 1) {
                             edge = 1.0 - edge;
@@ -189,11 +218,16 @@
                 this.gl.viewport(0, 0, this.gl.canvas.width, this.gl.canvas.height);
                 this.gl.bindTexture(this.gl.TEXTURE_2D, this.tex); 
                 this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, videoElement);
+                
+                // Pass all uniforms
                 this.gl.uniform2f(this.gl.getUniformLocation(this.program, "u_resolution"), width, height);
                 this.gl.uniform1f(this.gl.getUniformLocation(this.program, "u_sensitivity"), this.sensitivity);
                 this.gl.uniform1f(this.gl.getUniformLocation(this.program, "u_contrast"), this.contrast);
                 this.gl.uniform1f(this.gl.getUniformLocation(this.program, "u_noiseGate"), this.noiseGate);
+                this.gl.uniform1f(this.gl.getUniformLocation(this.program, "u_thickness"), this.thickness);
+                this.gl.uniform1f(this.gl.getUniformLocation(this.program, "u_exposure"), this.exposure);
                 this.gl.uniform1i(this.gl.getUniformLocation(this.program, "u_invert"), this.invert);
+                
                 this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
             }
         };
@@ -246,8 +280,11 @@
             },
 
             updateXRaySettings() {
+                // Read from all 6 UI controls
                 XRayEngine.sensitivity = (parseInt(document.getElementById('xray-vid-sens').value) / 50.0) * 3.0; 
                 XRayEngine.contrast = parseInt(document.getElementById('xray-vid-cont').value) / 100.0;
+                XRayEngine.thickness = parseInt(document.getElementById('xray-vid-thick').value) / 10.0; 
+                XRayEngine.exposure = parseInt(document.getElementById('xray-vid-exp').value) / 100.0; 
                 XRayEngine.noiseGate = parseInt(document.getElementById('xray-vid-gate').value) / 100.0;
                 XRayEngine.invert = document.getElementById('xray-vid-inv').checked ? 1 : 0;
             },
@@ -260,8 +297,12 @@
                 video.play();
                 
                 this.xrayActive = true; 
+                
+                // Reset to defaults
                 document.getElementById('xray-vid-sens').value = 50;
                 document.getElementById('xray-vid-cont').value = 100;
+                document.getElementById('xray-vid-thick').value = 10;
+                document.getElementById('xray-vid-exp').value = 100;
                 document.getElementById('xray-vid-gate').value = 0;
                 document.getElementById('xray-vid-inv').checked = false;
                 
@@ -285,6 +326,8 @@
                 if(video.readyState >= 2 && video.videoWidth > 10) {
                     const w = video.videoWidth, h = video.videoHeight;
                     const c = document.getElementById('xray-gl-canvas'); 
+                    
+                    // Keep canvas internal resolution locked to video source resolution
                     if(c.width !== w) { c.width = w; c.height = h; }
                     
                     if(!XRayEngine.gl) XRayEngine.init(c);
@@ -311,6 +354,7 @@
                 video.currentTime = 0;
                 this.xrayChunks = [];
 
+                // Capture stream from the WebGL canvas
                 const stream = canvas.captureStream(30); 
                 let options = { mimeType: 'video/webm; codecs=vp9' };
                 if (MediaRecorder.isTypeSupported('video/mp4')) {

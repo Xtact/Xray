@@ -40,20 +40,13 @@
         .carousel-header { display: flex; justify-content: flex-start; align-items: center; padding: 5px 0; }
         .carousel-header span { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #00ffff; }
 
-        .switch { position: relative; display: inline-block; width: 40px; height: 24px; }
-        .switch input { opacity: 0; width: 0; height: 0; }
-        .slider-switch { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #555; transition: .3s; border-radius: 24px; }
-        .slider-switch:before { position: absolute; content: ""; height: 20px; width: 20px; left: 2px; bottom: 2px; background-color: white; transition: .3s; border-radius: 50%; }
-        input:checked + .slider-switch { background-color: #00ffff; }
-        input:checked + .slider-switch:before { transform: translateX(16px); }
-
         .tune-deck { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 15px; background: transparent; border: none; width: 100%; }
 
         /* SPLIT VIEW CSS */
         #split-view-container { position: absolute; top: calc(env(safe-area-inset-top, 20px) + 60px); left: 0; width: 100%; bottom: 330px; display: flex; flex-direction: column; background: #000; }
         .split-pane { flex: 1; position: relative; min-height: 0; overflow: hidden; }
         .split-pane video, .split-pane canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
-        .split-label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); color: #fff; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; z-index: 2; backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1); }
+        .split-label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); color: #fff; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; z-index: 2; backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1); pointer-events: none;}
         .split-label.xray-label { color: #00ffff; border-color: rgba(0,255,255,0.3); }
 
         .ar-bottom-bar { position: absolute; bottom: 0; left: 0; width: 100%; height: 330px; display: flex; flex-direction: column; align-items: center; z-index: 10; background: #0a0a0a; border-top: 1px solid #222; padding-bottom: env(safe-area-inset-bottom, 20px); }
@@ -89,13 +82,18 @@
             <div style="display: flex; gap: 15px; align-items: center;">
                 <button class="icon-btn" onclick="App.closeXRayVideo()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
             </div>
-            <span id="xray-status-label" style="font-size: 14px; font-weight: 600; color: #00ffff;">Split-Screen Preview</span>
+            <span id="xray-status-label" style="font-size: 14px; font-weight: 600; color: #00ffff; text-shadow: 0 2px 4px rgba(0,0,0,0.8);">Split-Screen Preview</span>
             <div style="width: 44px;"></div>
         </div>
 
         <div id="split-view-container">
             <div class="split-pane">
                 <span class="split-label">Original Video</span>
+                
+                <button id="btn-xray-playpause" class="icon-btn" onclick="App.toggleXRayVideoPlay()" style="position: absolute; top: 10px; right: 10px; z-index: 30; background: rgba(0,255,255,0.2); border-color: #00ffff; color: #00ffff;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+                </button>
+                
                 <video id="xray-video-source" playsinline muted loop></video>
             </div>
             
@@ -127,12 +125,19 @@
                     <div class="carousel-header"><span>Noise Gate</span></div>
                     <input type="range" id="xray-vid-gate" min="0" max="100" value="0" oninput="App.updateXRaySettings()">
                 </div>
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 10px 0;">
-                    <span style="font-size: 10px; font-weight: 600; color: #00ffff; text-transform: uppercase;">Invert Matrix</span>
-                    <label class="switch" style="transform: scale(0.85); margin:0;">
-                        <input type="checkbox" id="xray-vid-inv" onchange="App.updateXRaySettings()">
-                        <span class="slider-switch round"></span>
-                    </label>
+                
+                <div class="slider-container" style="padding-top: 5px;">
+                    <div class="carousel-header"><span>Color Filter Matrix</span></div>
+                    <select id="xray-vid-filter" onchange="App.updateXRaySettings()" style="width: 100%; background: #111; color: #00ffff; border: 1px solid #333; padding: 6px; border-radius: 6px; outline: none; font-size: 11px; font-weight: bold; text-align: center; appearance: none; -webkit-appearance: none;">
+                        <option value="0">White on Black (Default)</option>
+                        <option value="1">Black on White (Inverted)</option>
+                        <option value="2">Yellow on Black</option>
+                        <option value="3">Black on Yellow</option>
+                        <option value="4">Red on Black</option>
+                        <option value="5">Black on Red</option>
+                        <option value="6">Yellow on Blue</option>
+                        <option value="7">White on Blue</option>
+                    </select>
                 </div>
             </div>
             
@@ -153,7 +158,7 @@
     <script>
         const XRayEngine = {
             gl: null, program: null, tex: null, isActive: false, 
-            sensitivity: 1.5, contrast: 1.0, noiseGate: 0.0, invert: 0,
+            sensitivity: 1.5, contrast: 1.0, noiseGate: 0.0, colorMode: 0,
             thickness: 1.0, exposure: 1.0,
 
             init(canvas) {
@@ -162,7 +167,7 @@
                 const fsSource = `
                     precision mediump float; varying vec2 v_texCoord; uniform sampler2D u_image; 
                     uniform vec2 u_resolution; uniform float u_sensitivity; 
-                    uniform float u_contrast; uniform float u_noiseGate; uniform int u_invert;
+                    uniform float u_contrast; uniform float u_noiseGate; uniform int u_colorMode;
                     uniform float u_thickness; uniform float u_exposure;
                     
                     float getLuma(vec2 offset) {
@@ -196,11 +201,33 @@
                         // Apply final exposure boost
                         edge = clamp(edge * u_exposure, 0.0, 1.0);
                         
-                        if (u_invert == 1) {
-                            edge = 1.0 - edge;
+                        // iOS Native Magnifier Color Matrices
+                        vec3 bgColor;
+                        vec3 edgeColor;
+                        
+                        if (u_colorMode == 0) { // White on Black
+                            bgColor = vec3(0.0, 0.0, 0.0); edgeColor = vec3(1.0, 1.0, 1.0);
+                        } else if (u_colorMode == 1) { // Black on White
+                            bgColor = vec3(1.0, 1.0, 1.0); edgeColor = vec3(0.0, 0.0, 0.0);
+                        } else if (u_colorMode == 2) { // Yellow on Black
+                            bgColor = vec3(0.0, 0.0, 0.0); edgeColor = vec3(1.0, 1.0, 0.0);
+                        } else if (u_colorMode == 3) { // Black on Yellow
+                            bgColor = vec3(1.0, 1.0, 0.0); edgeColor = vec3(0.0, 0.0, 0.0);
+                        } else if (u_colorMode == 4) { // Red on Black
+                            bgColor = vec3(0.0, 0.0, 0.0); edgeColor = vec3(1.0, 0.0, 0.0);
+                        } else if (u_colorMode == 5) { // Black on Red
+                            bgColor = vec3(1.0, 0.0, 0.0); edgeColor = vec3(0.0, 0.0, 0.0);
+                        } else if (u_colorMode == 6) { // Yellow on Blue
+                            bgColor = vec3(0.0, 0.0, 1.0); edgeColor = vec3(1.0, 1.0, 0.0);
+                        } else if (u_colorMode == 7) { // White on Blue
+                            bgColor = vec3(0.0, 0.0, 1.0); edgeColor = vec3(1.0, 1.0, 1.0);
+                        } else {
+                            bgColor = vec3(0.0); edgeColor = vec3(1.0);
                         }
 
-                        gl_FragColor = vec4(edge, edge, edge, 1.0);
+                        // Mix based on structural intensity
+                        vec3 finalColor = mix(bgColor, edgeColor, edge);
+                        gl_FragColor = vec4(finalColor, 1.0);
                     }
                 `;
                 const compile = (type, source) => { const s = this.gl.createShader(type); this.gl.shaderSource(s, source); this.gl.compileShader(s); return s; };
@@ -226,7 +253,7 @@
                 this.gl.uniform1f(this.gl.getUniformLocation(this.program, "u_noiseGate"), this.noiseGate);
                 this.gl.uniform1f(this.gl.getUniformLocation(this.program, "u_thickness"), this.thickness);
                 this.gl.uniform1f(this.gl.getUniformLocation(this.program, "u_exposure"), this.exposure);
-                this.gl.uniform1i(this.gl.getUniformLocation(this.program, "u_invert"), this.invert);
+                this.gl.uniform1i(this.gl.getUniformLocation(this.program, "u_colorMode"), this.colorMode);
                 
                 this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
             }
@@ -286,9 +313,21 @@
                 XRayEngine.thickness = parseInt(document.getElementById('xray-vid-thick').value) / 10.0; 
                 XRayEngine.exposure = parseInt(document.getElementById('xray-vid-exp').value) / 100.0; 
                 XRayEngine.noiseGate = parseInt(document.getElementById('xray-vid-gate').value) / 100.0;
-                XRayEngine.invert = document.getElementById('xray-vid-inv').checked ? 1 : 0;
+                XRayEngine.colorMode = parseInt(document.getElementById('xray-vid-filter').value);
             },
             
+            toggleXRayVideoPlay() {
+                const video = document.getElementById('xray-video-source');
+                const btn = document.getElementById('btn-xray-playpause');
+                if (video.paused) {
+                    video.play();
+                    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+                } else {
+                    video.pause();
+                    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+                }
+            },
+
             openXRayVideo() {
                 this.switch('state-xray-video'); 
                 
@@ -304,8 +343,11 @@
                 document.getElementById('xray-vid-thick').value = 10;
                 document.getElementById('xray-vid-exp').value = 100;
                 document.getElementById('xray-vid-gate').value = 0;
-                document.getElementById('xray-vid-inv').checked = false;
+                document.getElementById('xray-vid-filter').value = "0";
                 
+                const playBtn = document.getElementById('btn-xray-playpause');
+                if(playBtn) playBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+
                 this.updateXRaySettings();
                 
                 setTimeout(() => { this.loopXRayVideo(); }, 100); 
@@ -384,6 +426,9 @@
                     document.getElementById('xray-processing-overlay').style.display = 'none';
                     video.loop = true;
                     video.play();
+
+                    const btn = document.getElementById('btn-xray-playpause');
+                    if(btn) btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
                 };
 
                 video.onseeked = () => {

@@ -62,7 +62,7 @@
     <div id="state-home" class="app-state active-state">
         <div class="home-content" style="display: flex; flex-direction: column; align-items: center; width: 100%;">
             <h1 class="app-title">X-Ray Video</h1>
-            <p class="app-subtitle">Structural Edge Processor</p>
+            <p class="app-subtitle">Temporal Edge Processor</p>
             
             <input type="file" id="file-upload-xray" accept="video/mp4,video/quicktime,video/webm" style="display:none" onchange="App.handleUpload(event)">
 
@@ -82,23 +82,21 @@
             <div style="display: flex; gap: 15px; align-items: center;">
                 <button class="icon-btn" onclick="App.closeXRayVideo()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
             </div>
-            <span id="xray-status-label" style="font-size: 14px; font-weight: 600; color: #00ffff; text-shadow: 0 2px 4px rgba(0,0,0,0.8);">Split-Screen Preview</span>
+            <span id="xray-status-label" style="font-size: 14px; font-weight: 600; color: #00ffff; text-shadow: 0 2px 4px rgba(0,0,0,0.8);">Temporal Sync Active</span>
             <div style="width: 44px;"></div>
         </div>
 
         <div id="split-view-container">
             <div class="split-pane">
-                <span class="split-label">Original Video</span>
-                
+                <span class="split-label">Raw Sensor</span>
                 <button id="btn-xray-playpause" class="icon-btn" onclick="App.toggleXRayVideoPlay()" style="position: absolute; top: 10px; right: 10px; z-index: 30; background: rgba(0,255,255,0.2); border-color: #00ffff; color: #00ffff;">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
                 </button>
-                
                 <video id="xray-video-source" playsinline muted loop></video>
             </div>
             
             <div class="split-pane" style="border-top: 1px solid #333; background: #050505;">
-                <span class="split-label xray-label">X-Ray Matrix</span>
+                <span class="split-label xray-label">Accumulation Matrix</span>
                 <canvas id="xray-gl-canvas"></canvas>
             </div>
         </div>
@@ -125,8 +123,12 @@
                     <div class="carousel-header"><span>Noise Gate</span></div>
                     <input type="range" id="xray-vid-gate" min="0" max="100" value="0" oninput="App.updateXRaySettings()">
                 </div>
+                <div class="slider-container">
+                    <div class="carousel-header"><span>Temporal Smoothing</span></div>
+                    <input type="range" id="xray-vid-temp" min="0" max="95" value="50" oninput="App.updateXRaySettings()">
+                </div>
                 
-                <div class="slider-container" style="padding-top: 5px;">
+                <div class="slider-container" style="grid-column: span 2; padding-top: 5px;">
                     <div class="carousel-header"><span>Color Filter Matrix</span></div>
                     <select id="xray-vid-filter" onchange="App.updateXRaySettings()" style="width: 100%; background: #111; color: #00ffff; border: 1px solid #333; padding: 6px; border-radius: 6px; outline: none; font-size: 11px; font-weight: bold; text-align: center; appearance: none; -webkit-appearance: none;">
                         <option value="0">White on Black (Default)</option>
@@ -157,18 +159,32 @@
 
     <script>
         const XRayEngine = {
-            gl: null, program: null, tex: null, isActive: false, 
+            gl: null, program: null, copyProgram: null,
+            videoTex: null, fboA: null, fboB: null, texA: null, texB: null,
+            posBuf: null, texBuf: null,
+            pingPong: true, width: 0, height: 0, isActive: false, 
+            
             sensitivity: 1.5, contrast: 1.0, noiseGate: 0.0, colorMode: 0,
-            thickness: 1.0, exposure: 1.0,
+            thickness: 1.0, exposure: 1.0, temporalWeight: 0.5,
 
             init(canvas) {
-                this.gl = canvas.getContext('webgl', { preserveDrawingBuffer: true }); if(!this.gl) return false;
-                const vsSource = `attribute vec2 a_position; attribute vec2 a_texCoord; varying vec2 v_texCoord; void main() { gl_Position = vec4(a_position, 0.0, 1.0); v_texCoord = vec2(a_texCoord.x, 1.0 - a_texCoord.y); }`;
-                const fsSource = `
-                    precision mediump float; varying vec2 v_texCoord; uniform sampler2D u_image; 
+                this.gl = canvas.getContext('webgl', { preserveDrawingBuffer: true }); 
+                if(!this.gl) return false;
+                const gl = this.gl;
+
+                // MAIN PING-PONG SHADER (Video -> FBO)
+                const vsMain = `
+                    attribute vec2 a_position; attribute vec2 a_texCoord; varying vec2 v_texCoord; 
+                    void main() { 
+                        gl_Position = vec4(a_position, 0.0, 1.0); 
+                        v_texCoord = vec2(a_texCoord.x, 1.0 - a_texCoord.y); 
+                    }`;
+                const fsMain = `
+                    precision mediump float; varying vec2 v_texCoord; 
+                    uniform sampler2D u_image; uniform sampler2D u_prevFrame;
                     uniform vec2 u_resolution; uniform float u_sensitivity; 
                     uniform float u_contrast; uniform float u_noiseGate; uniform int u_colorMode;
-                    uniform float u_thickness; uniform float u_exposure;
+                    uniform float u_thickness; uniform float u_exposure; uniform float u_temporalWeight;
                     
                     float getLuma(vec2 offset) {
                         vec3 rgb = texture2D(u_image, v_texCoord + offset).rgb;
@@ -177,7 +193,6 @@
                     }
 
                     void main() {
-                        // Apply dynamic edge thickness
                         vec2 step = (1.0 / u_resolution) * u_thickness;
                         
                         float tll = getLuma(vec2(-step.x, step.y));
@@ -194,68 +209,155 @@
                         
                         float edge = sqrt(dx*dx + dy*dy) * u_sensitivity;
                         
-                        if (edge < u_noiseGate) {
-                            edge = 0.0;
-                        }
-                        
-                        // Apply final exposure boost
+                        if (edge < u_noiseGate) { edge = 0.0; }
                         edge = clamp(edge * u_exposure, 0.0, 1.0);
                         
-                        // iOS Native Magnifier Color Matrices
-                        vec3 bgColor;
-                        vec3 edgeColor;
-                        
-                        if (u_colorMode == 0) { // White on Black
-                            bgColor = vec3(0.0, 0.0, 0.0); edgeColor = vec3(1.0, 1.0, 1.0);
-                        } else if (u_colorMode == 1) { // Black on White
-                            bgColor = vec3(1.0, 1.0, 1.0); edgeColor = vec3(0.0, 0.0, 0.0);
-                        } else if (u_colorMode == 2) { // Yellow on Black
-                            bgColor = vec3(0.0, 0.0, 0.0); edgeColor = vec3(1.0, 1.0, 0.0);
-                        } else if (u_colorMode == 3) { // Black on Yellow
-                            bgColor = vec3(1.0, 1.0, 0.0); edgeColor = vec3(0.0, 0.0, 0.0);
-                        } else if (u_colorMode == 4) { // Red on Black
-                            bgColor = vec3(0.0, 0.0, 0.0); edgeColor = vec3(1.0, 0.0, 0.0);
-                        } else if (u_colorMode == 5) { // Black on Red
-                            bgColor = vec3(1.0, 0.0, 0.0); edgeColor = vec3(0.0, 0.0, 0.0);
-                        } else if (u_colorMode == 6) { // Yellow on Blue
-                            bgColor = vec3(0.0, 0.0, 1.0); edgeColor = vec3(1.0, 1.0, 0.0);
-                        } else if (u_colorMode == 7) { // White on Blue
-                            bgColor = vec3(0.0, 0.0, 1.0); edgeColor = vec3(1.0, 1.0, 1.0);
-                        } else {
-                            bgColor = vec3(0.0); edgeColor = vec3(1.0);
-                        }
+                        vec3 bgColor; vec3 edgeColor;
+                        if (u_colorMode == 0) { bgColor = vec3(0.0, 0.0, 0.0); edgeColor = vec3(1.0, 1.0, 1.0); } 
+                        else if (u_colorMode == 1) { bgColor = vec3(1.0, 1.0, 1.0); edgeColor = vec3(0.0, 0.0, 0.0); } 
+                        else if (u_colorMode == 2) { bgColor = vec3(0.0, 0.0, 0.0); edgeColor = vec3(1.0, 1.0, 0.0); } 
+                        else if (u_colorMode == 3) { bgColor = vec3(1.0, 1.0, 0.0); edgeColor = vec3(0.0, 0.0, 0.0); } 
+                        else if (u_colorMode == 4) { bgColor = vec3(0.0, 0.0, 0.0); edgeColor = vec3(1.0, 0.0, 0.0); } 
+                        else if (u_colorMode == 5) { bgColor = vec3(1.0, 0.0, 0.0); edgeColor = vec3(0.0, 0.0, 0.0); } 
+                        else if (u_colorMode == 6) { bgColor = vec3(0.0, 0.0, 1.0); edgeColor = vec3(1.0, 1.0, 0.0); } 
+                        else if (u_colorMode == 7) { bgColor = vec3(0.0, 0.0, 1.0); edgeColor = vec3(1.0, 1.0, 1.0); } 
+                        else { bgColor = vec3(0.0); edgeColor = vec3(1.0); }
 
-                        // Mix based on structural intensity
-                        vec3 finalColor = mix(bgColor, edgeColor, edge);
-                        gl_FragColor = vec4(finalColor, 1.0);
-                    }
-                `;
-                const compile = (type, source) => { const s = this.gl.createShader(type); this.gl.shaderSource(s, source); this.gl.compileShader(s); return s; };
-                const vs = compile(this.gl.VERTEX_SHADER, vsSource); const fs = compile(this.gl.FRAGMENT_SHADER, fsSource);
-                this.program = this.gl.createProgram(); this.gl.attachShader(this.program, vs); this.gl.attachShader(this.program, fs); this.gl.linkProgram(this.program); this.gl.useProgram(this.program);
-                const verts = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]); const posBuf = this.gl.createBuffer(); this.gl.bindBuffer(this.gl.ARRAY_BUFFER, posBuf); this.gl.bufferData(this.gl.ARRAY_BUFFER, verts, this.gl.STATIC_DRAW);
-                const posLoc = this.gl.getAttribLocation(this.program, "a_position"); this.gl.enableVertexAttribArray(posLoc); this.gl.vertexAttribPointer(posLoc, 2, this.gl.FLOAT, false, 0, 0);
-                const texCoords = new Float32Array([0,0, 1,0, 0,1, 1,1]); const tBuf = this.gl.createBuffer(); this.gl.bindBuffer(this.gl.ARRAY_BUFFER, tBuf); this.gl.bufferData(this.gl.ARRAY_BUFFER, texCoords, this.gl.STATIC_DRAW);
-                const tLoc = this.gl.getAttribLocation(this.program, "a_texCoord"); this.gl.enableVertexAttribArray(tLoc); this.gl.vertexAttribPointer(tLoc, 2, this.gl.FLOAT, false, 0, 0);
-                this.tex = this.gl.createTexture(); this.gl.bindTexture(this.gl.TEXTURE_2D, this.tex); this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE); this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE); this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
+                        vec3 currentFrame = mix(bgColor, edgeColor, edge);
+                        vec3 prevFrame = texture2D(u_prevFrame, v_texCoord).rgb;
+                        
+                        gl_FragColor = vec4(mix(currentFrame, prevFrame, u_temporalWeight), 1.0);
+                    }`;
+
+                // COPY SHADER (FBO -> Screen)
+                const vsCopy = `
+                    attribute vec2 a_position; attribute vec2 a_texCoord; varying vec2 v_texCoord; 
+                    void main() { 
+                        gl_Position = vec4(a_position, 0.0, 1.0); 
+                        v_texCoord = a_texCoord; 
+                    }`;
+                const fsCopy = `
+                    precision mediump float; varying vec2 v_texCoord; uniform sampler2D u_image; 
+                    void main() { 
+                        gl_FragColor = texture2D(u_image, v_texCoord); 
+                    }`;
+
+                const compile = (v, f) => {
+                    const p = gl.createProgram();
+                    const vs = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(vs, v); gl.compileShader(vs);
+                    const fs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fs, f); gl.compileShader(fs);
+                    gl.attachShader(p, vs); gl.attachShader(p, fs); gl.linkProgram(p); return p;
+                };
+
+                this.program = compile(vsMain, fsMain);
+                this.copyProgram = compile(vsCopy, fsCopy);
+
+                // Initialize Static Buffers
+                const verts = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
+                this.posBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuf); gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+                const texCoords = new Float32Array([0,0, 1,0, 0,1, 1,1]);
+                this.texBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.texBuf); gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
+
+                // Initialize Video Source Texture
+                this.videoTex = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, this.videoTex);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+
                 this.isActive = true; return true;
             },
+
+            allocateFBOs(gl, w, h) {
+                if (this.width === w && this.height === h) return;
+                this.width = w; this.height = h;
+                
+                const createFBO = () => {
+                    const tex = gl.createTexture();
+                    gl.bindTexture(gl.TEXTURE_2D, tex);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                    const fbo = gl.createFramebuffer();
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+                    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+                    return { fbo, tex };
+                };
+
+                if(this.fboA) { gl.deleteFramebuffer(this.fboA); gl.deleteTexture(this.texA); }
+                if(this.fboB) { gl.deleteFramebuffer(this.fboB); gl.deleteTexture(this.texB); }
+                
+                let a = createFBO(); this.fboA = a.fbo; this.texA = a.tex;
+                let b = createFBO(); this.fboB = b.fbo; this.texB = b.tex;
+                
+                // Clear FBOs to prevent garbage memory ghosting
+                gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboA); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
+                gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboB); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            },
+
+            bindAttribs(prog) {
+                const gl = this.gl;
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuf);
+                const pLoc = gl.getAttribLocation(prog, "a_position");
+                gl.enableVertexAttribArray(pLoc); gl.vertexAttribPointer(pLoc, 2, gl.FLOAT, false, 0, 0);
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.texBuf);
+                const tLoc = gl.getAttribLocation(prog, "a_texCoord");
+                gl.enableVertexAttribArray(tLoc); gl.vertexAttribPointer(tLoc, 2, gl.FLOAT, false, 0, 0);
+            },
+
             render(videoElement, width, height) {
                 if(!this.gl || !this.isActive) return;
-                this.gl.viewport(0, 0, this.gl.canvas.width, this.gl.canvas.height);
-                this.gl.bindTexture(this.gl.TEXTURE_2D, this.tex); 
-                this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, videoElement);
+                const gl = this.gl;
+                this.allocateFBOs(gl, width, height);
+
+                gl.viewport(0, 0, width, height);
+
+                // Only grab new frame data from the video element if it is actively playing
+                if (!videoElement.paused) {
+                    gl.activeTexture(gl.TEXTURE0);
+                    gl.bindTexture(gl.TEXTURE_2D, this.videoTex);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, videoElement);
+                }
+
+                const readTex = this.pingPong ? this.texA : this.texB;
+                const writeFBO = this.pingPong ? this.fboB : this.fboA;
+                const writeTex = this.pingPong ? this.texB : this.texA;
+
+                // PASS 1: Render Matrix + Temporal Accumulation to FBO
+                gl.bindFramebuffer(gl.FRAMEBUFFER, writeFBO);
+                gl.useProgram(this.program);
+                this.bindAttribs(this.program);
+
+                gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.videoTex);
+                gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, readTex);
+
+                gl.uniform1i(gl.getUniformLocation(this.program, "u_image"), 0);
+                gl.uniform1i(gl.getUniformLocation(this.program, "u_prevFrame"), 1);
+                gl.uniform2f(gl.getUniformLocation(this.program, "u_resolution"), width, height);
+                gl.uniform1f(gl.getUniformLocation(this.program, "u_sensitivity"), this.sensitivity);
+                gl.uniform1f(gl.getUniformLocation(this.program, "u_contrast"), this.contrast);
+                gl.uniform1f(gl.getUniformLocation(this.program, "u_noiseGate"), this.noiseGate);
+                gl.uniform1f(gl.getUniformLocation(this.program, "u_thickness"), this.thickness);
+                gl.uniform1f(gl.getUniformLocation(this.program, "u_exposure"), this.exposure);
+                gl.uniform1f(gl.getUniformLocation(this.program, "u_temporalWeight"), this.temporalWeight);
+                gl.uniform1i(gl.getUniformLocation(this.program, "u_colorMode"), this.colorMode);
+
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+                // PASS 2: Blit FBO to Screen Canvas
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                gl.useProgram(this.copyProgram);
+                this.bindAttribs(this.copyProgram);
                 
-                // Pass all uniforms
-                this.gl.uniform2f(this.gl.getUniformLocation(this.program, "u_resolution"), width, height);
-                this.gl.uniform1f(this.gl.getUniformLocation(this.program, "u_sensitivity"), this.sensitivity);
-                this.gl.uniform1f(this.gl.getUniformLocation(this.program, "u_contrast"), this.contrast);
-                this.gl.uniform1f(this.gl.getUniformLocation(this.program, "u_noiseGate"), this.noiseGate);
-                this.gl.uniform1f(this.gl.getUniformLocation(this.program, "u_thickness"), this.thickness);
-                this.gl.uniform1f(this.gl.getUniformLocation(this.program, "u_exposure"), this.exposure);
-                this.gl.uniform1i(this.gl.getUniformLocation(this.program, "u_colorMode"), this.colorMode);
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, writeTex);
+                gl.uniform1i(gl.getUniformLocation(this.copyProgram, "u_image"), 0);
                 
-                this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+                this.pingPong = !this.pingPong;
             }
         };
 
@@ -265,7 +367,6 @@
             xrayChunks: [],
 
             init() {
-                // Binding resize to adjust canvas aspect ratios if needed
                 window.addEventListener('resize', () => { 
                     if(this.xrayActive) {
                         const video = document.getElementById('xray-video-source');
@@ -307,12 +408,12 @@
             },
 
             updateXRaySettings() {
-                // Read from all 6 UI controls
                 XRayEngine.sensitivity = (parseInt(document.getElementById('xray-vid-sens').value) / 50.0) * 3.0; 
                 XRayEngine.contrast = parseInt(document.getElementById('xray-vid-cont').value) / 100.0;
                 XRayEngine.thickness = parseInt(document.getElementById('xray-vid-thick').value) / 10.0; 
                 XRayEngine.exposure = parseInt(document.getElementById('xray-vid-exp').value) / 100.0; 
                 XRayEngine.noiseGate = parseInt(document.getElementById('xray-vid-gate').value) / 100.0;
+                XRayEngine.temporalWeight = parseInt(document.getElementById('xray-vid-temp').value) / 100.0;
                 XRayEngine.colorMode = parseInt(document.getElementById('xray-vid-filter').value);
             },
             
@@ -337,12 +438,12 @@
                 
                 this.xrayActive = true; 
                 
-                // Reset to defaults
                 document.getElementById('xray-vid-sens').value = 50;
                 document.getElementById('xray-vid-cont').value = 100;
                 document.getElementById('xray-vid-thick').value = 10;
                 document.getElementById('xray-vid-exp').value = 100;
                 document.getElementById('xray-vid-gate').value = 0;
+                document.getElementById('xray-vid-temp').value = 50;
                 document.getElementById('xray-vid-filter').value = "0";
                 
                 const playBtn = document.getElementById('btn-xray-playpause');
@@ -369,7 +470,6 @@
                     const w = video.videoWidth, h = video.videoHeight;
                     const c = document.getElementById('xray-gl-canvas'); 
                     
-                    // Keep canvas internal resolution locked to video source resolution
                     if(c.width !== w) { c.width = w; c.height = h; }
                     
                     if(!XRayEngine.gl) XRayEngine.init(c);
@@ -396,7 +496,6 @@
                 video.currentTime = 0;
                 this.xrayChunks = [];
 
-                // Capture stream from the WebGL canvas
                 const stream = canvas.captureStream(30); 
                 let options = { mimeType: 'video/webm; codecs=vp9' };
                 if (MediaRecorder.isTypeSupported('video/mp4')) {
@@ -419,7 +518,7 @@
                     document.body.appendChild(a);
                     a.style = 'display: none';
                     a.href = url;
-                    a.download = `XRay_Export_${Date.now()}.${options.mimeType === 'video/mp4' ? 'mp4' : 'webm'}`;
+                    a.download = `XRay_Temporal_Export_${Date.now()}.${options.mimeType === 'video/mp4' ? 'mp4' : 'webm'}`;
                     a.click();
                     
                     window.URL.revokeObjectURL(url);
